@@ -1,7 +1,7 @@
 let body1, body2;
 let G;
 let gSlider, m1Slider, m2Slider, distSlider, dragSlider;
-let resetButton;
+let resetButton, comToggle;
 
 let trails1 = [];
 let trails2 = [];
@@ -42,6 +42,9 @@ function setup() {
   uiDiv.child(resetButton);
   resetButton.mousePressed(resetSimulation);
 
+  comToggle = createCheckbox("Show Center of Mass", false);
+  uiDiv.child(comToggle);
+
   resetSimulation();
 }
 
@@ -53,12 +56,16 @@ function resetSimulation() {
 
   let center = createVector(width / 2, height / 2);
 
-  body1 = new Body(center.copy(), createVector(0, 0), 20, m1, color(255, 150, 0));
-  let pos2 = createVector(center.x + distance, center.y);
+  // Calculate velocities to conserve momentum
+  let speed = sqrt((G * (m1 + m2)) / distance);
+  let vel1 = createVector(0, speed * (m2 / (m1 + m2)));
+  let vel2 = createVector(0, -speed * (m1 / (m1 + m2)));
 
-  // Stable orbit
-  let speed = sqrt((G * m1) / distance);
-  let vel2 = createVector(0, -speed);
+  // Position bodies on x-axis, centered around center
+  let pos1 = createVector(center.x - (m2 / (m1 + m2)) * distance, center.y);
+  let pos2 = createVector(center.x + (m1 / (m1 + m2)) * distance, center.y);
+
+  body1 = new Body(pos1, vel1, 20, m1, color(255, 150, 0));
   body2 = new Body(pos2, vel2, 10, m2, color(0, 150, 255));
 
   trails1 = [];
@@ -74,16 +81,18 @@ function draw() {
   body1.mass = m1Slider.value();
   body2.mass = m2Slider.value();
 
-  let force = body1.attract(body2, G);
-  body2.applyForce(force);
+  // Mutual gravity forces
+  let forceOn2 = body1.attract(body2, G);
+  body2.applyForce(forceOn2);
+  body1.applyForce(p5.Vector.mult(forceOn2, -1)); // Equal and opposite
 
-  // Apply drag
-  let dragForce1 = p5.Vector.mult(body1.vel, -drag);
-  let dragForce2 = p5.Vector.mult(body2.vel, -drag);
+  // Drag forces
+  let dragForce1 = p5.Vector.mult(body1.getVelocity(), -drag);
+  let dragForce2 = p5.Vector.mult(body2.getVelocity(), -drag);
   body1.applyForce(dragForce1);
   body2.applyForce(dragForce2);
 
-  body1.update(); // Optional: make both dynamic
+  body1.update();
   body2.update();
 
   trails1.push(body1.pos.copy());
@@ -94,6 +103,16 @@ function draw() {
 
   body1.show();
   body2.show();
+
+  if (comToggle.checked()) {
+    let com = computeCenterOfMass(body1, body2);
+    fill(255);
+    noStroke();
+    ellipse(com.x, com.y, 8);
+    textAlign(CENTER);
+    textSize(12);
+    text("COM", com.x, com.y - 10);
+  }
 }
 
 function drawTrails(trail, col) {
@@ -106,14 +125,21 @@ function drawTrails(trail, col) {
   endShape();
 }
 
+function computeCenterOfMass(b1, b2) {
+  let totalMass = b1.mass + b2.mass;
+  let comX = (b1.pos.x * b1.mass + b2.pos.x * b2.mass) / totalMass;
+  let comY = (b1.pos.y * b1.mass + b2.pos.y * b2.mass) / totalMass;
+  return createVector(comX, comY);
+}
+
 class Body {
   constructor(pos, vel, r, mass, col) {
-    this.pos = pos;
-    this.vel = vel;
-    this.acc = createVector(0, 0);
+    this.pos = pos.copy();
     this.r = r;
     this.mass = mass;
     this.col = col;
+    this.prevPos = p5.Vector.sub(this.pos, vel.copy());
+    this.acc = createVector(0, 0);
   }
 
   applyForce(f) {
@@ -122,8 +148,9 @@ class Body {
   }
 
   update() {
-    this.vel.add(this.acc);
-    this.pos.add(this.vel);
+    let temp = this.pos.copy();
+    this.pos.add(p5.Vector.sub(this.pos, this.prevPos).add(this.acc));
+    this.prevPos = temp;
     this.acc.mult(0);
   }
 
@@ -140,5 +167,9 @@ class Body {
     fill(this.col);
     noStroke();
     ellipse(this.pos.x, this.pos.y, this.r * 2);
+  }
+
+  getVelocity() {
+    return p5.Vector.sub(this.pos, this.prevPos);
   }
 }
