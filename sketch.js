@@ -1,175 +1,293 @@
-let body1, body2;
-let G;
-let gSlider, m1Slider, m2Slider, distSlider, dragSlider;
-let resetButton, comToggle;
-
-let trails1 = [];
-let trails2 = [];
-
-let canvasDiv, uiDiv;
+let m1Slider, m2Slider, distSlider, gSlider, timeSlider, corSlider, resetButton;
+let bodies = [];
+let trailLayer;
+let G = 1;
+let timeScale = 1;
+let cor = 1; // Coefficient of restitution
+let softening = 10; // Base softening parameter
+const BASE_DT = 0.02; // Smaller base time step
+let comX, comY, totalMomentum, prevComX, prevComY, comDrift;
+let lastCollisionFrame = -100; // For collision debugging
 
 function setup() {
-  // Create outer layout
-  canvasDiv = createDiv().style('float', 'left');
-  uiDiv = createDiv().style('float', 'left').style('margin-left', '20px');
+  createCanvas(windowWidth, windowHeight);
+  trailLayer = createGraphics(width, height);
+  trailLayer.background(0);
 
-  // Create canvas inside canvasDiv
-  let canvas = createCanvas(800, 800);
-  canvas.parent(canvasDiv);
-
-  // UI inside uiDiv
-  uiDiv.child(createP("Gravitational Constant (G)"));
+  // Sliders & Controls
+  m1Slider = createSlider(10, 100, 30);
+  m1Slider.position(20, 20);
+  m2Slider = createSlider(10, 100, 30);
+  m2Slider.position(20, 50);
+  distSlider = createSlider(50, 400, 200);
+  distSlider.position(20, 80);
   gSlider = createSlider(0.1, 5, 1, 0.1);
-  uiDiv.child(gSlider);
+  gSlider.position(20, 110);
+  timeSlider = createSlider(0.1, 5, 1, 0.1);
+  timeSlider.position(20, 140);
+  corSlider = createSlider(0, 1, 1, 0.1);
+  corSlider.position(20, 170);
 
-  uiDiv.child(createP("Mass of Body 1"));
-  m1Slider = createSlider(100, 2000, 1000, 10);
-  uiDiv.child(m1Slider);
-
-  uiDiv.child(createP("Mass of Body 2"));
-  m2Slider = createSlider(10, 500, 100, 10);
-  uiDiv.child(m2Slider);
-
-  uiDiv.child(createP("Initial Distance Between Bodies"));
-  distSlider = createSlider(100, 400, 200, 10);
-  uiDiv.child(distSlider);
-
-  uiDiv.child(createP("Air Resistance Coefficient (c)"));
-  dragSlider = createSlider(0, 0.1, 0, 0.001);
-  uiDiv.child(dragSlider);
-
-  resetButton = createButton("Reset Simulation");
-  uiDiv.child(resetButton);
+  resetButton = createButton('Reset');
+  resetButton.position(20, 200);
   resetButton.mousePressed(resetSimulation);
-
-  comToggle = createCheckbox("Show Center of Mass", false);
-  uiDiv.child(comToggle);
 
   resetSimulation();
 }
 
 function resetSimulation() {
+  bodies = [];
   G = gSlider.value();
+
+  let dist = distSlider.value();
   let m1 = m1Slider.value();
   let m2 = m2Slider.value();
-  let distance = distSlider.value();
 
-  let center = createVector(width / 2, height / 2);
+  let totalMass = m1 + m2;
+  let omega = sqrt(G * totalMass / pow(dist, 3));
+  
+  bodies.push(new Body(-dist/2, 0, 0, omega * dist/2, m1, [0, 150, 255]));
+  bodies.push(new Body(dist/2, 0, 0, -omega * dist/2, m2, [255, 100, 0]));
 
-  // Calculate velocities to conserve momentum
-  let speed = sqrt((G * (m1 + m2)) / distance);
-  let vel1 = createVector(0, speed * (m2 / (m1 + m2)));
-  let vel2 = createVector(0, -speed * (m1 / (m1 + m2)));
-
-  // Position bodies on x-axis, centered around center
-  let pos1 = createVector(center.x - (m2 / (m1 + m2)) * distance, center.y);
-  let pos2 = createVector(center.x + (m1 / (m1 + m2)) * distance, center.y);
-
-  body1 = new Body(pos1, vel1, 20, m1, color(255, 150, 0));
-  body2 = new Body(pos2, vel2, 10, m2, color(0, 150, 255));
-
-  trails1 = [];
-  trails2 = [];
+  trailLayer.clear();
+  trailLayer.background(0);
+  prevComX = null;
 }
 
 function draw() {
-  background(0);
-
   G = gSlider.value();
-  let drag = dragSlider.value();
+  timeScale = timeSlider.value();
+  cor = corSlider.value();
 
-  body1.mass = m1Slider.value();
-  body2.mass = m2Slider.value();
+  updateMasses();
+  softening = 10 * sqrt((bodies[0].mass + bodies[1].mass) / 20);
 
-  // Mutual gravity forces
-  let forceOn2 = body1.attract(body2, G);
-  body2.applyForce(forceOn2);
-  body1.applyForce(p5.Vector.mult(forceOn2, -1)); // Equal and opposite
+  let minDist = p5.Vector.dist(bodies[0].pos, bodies[1].pos);
+  let dt = BASE_DT * constrain(minDist / 100, 0.1, 1);
+  let numSubSteps = max(1, floor(timeScale * 50 * (BASE_DT / dt))); // Adjusted for smaller BASE_DT
 
-  // Drag forces
-  let dragForce1 = p5.Vector.mult(body1.getVelocity(), -drag);
-  let dragForce2 = p5.Vector.mult(body2.getVelocity(), -drag);
-  body1.applyForce(dragForce1);
-  body2.applyForce(dragForce2);
+  for (let i = 0; i < numSubSteps; i++) {
+    for (let body of bodies) {
+      body.computeForce(bodies);
+    }
+    for (let body of bodies) {
+      body.verletStep(dt);
+    }
+    handleCollisions(dt);
+  }
 
-  body1.update();
-  body2.update();
+  if (frameCount % 2 === 0) {
+    updateTrails();
+  }
 
-  trails1.push(body1.pos.copy());
-  trails2.push(body2.pos.copy());
+  background(0);
+  image(trailLayer, 0, 0);
 
-  drawTrails(trails1, body1.col);
-  drawTrails(trails2, body2.col);
-
-  body1.show();
-  body2.show();
-
-  if (comToggle.checked()) {
-    let com = computeCenterOfMass(body1, body2);
-    fill(255);
+  if (frameCount - lastCollisionFrame < 10) {
+    fill(255, 255, 255, 150);
     noStroke();
-    ellipse(com.x, com.y, 8);
-    textAlign(CENTER);
-    textSize(12);
-    text("COM", com.x, com.y - 10);
+    let midPoint = p5.Vector.lerp(bodies[0].pos, bodies[1].pos, 0.5);
+    let s = screenPos(midPoint.x, midPoint.y);
+    ellipse(s.x, s.y, 80); // Brighter, larger flash
+  }
+
+  for (let body of bodies) {
+    body.display();
+  }
+
+  computeCOMandMomentum();
+  drawCenterOfMass();
+  drawUI();
+}
+
+function updateMasses() {
+  let m1 = m1Slider.value();
+  let m2 = m2Slider.value();
+
+  if (abs(bodies[0].mass - m1) > 0.1 || abs(bodies[1].mass - m2) > 0.1) {
+    let v1 = p5.Vector.sub(bodies[0].pos, bodies[0].prevPos).div(BASE_DT);
+    let v2 = p5.Vector.sub(bodies[1].pos, bodies[1].prevPos).div(BASE_DT);
+    let p1 = p5.Vector.mult(v1, bodies[0].mass);
+    let p2 = p5.Vector.mult(v2, bodies[1].mass);
+    let totalP = p5.Vector.add(p1, p2);
+
+    bodies[0].mass = m1;
+    bodies[1].mass = m2;
+    bodies[0].radius = sqrt(m1) * 0.8;
+    bodies[1].radius = sqrt(m2) * 0.8;
+
+    let totalMass = m1 + m2;
+    if (totalMass > 0) {
+      let v1New = p5.Vector.div(totalP, totalMass);
+      let v2New = v1New;
+      bodies[0].prevPos = p5.Vector.sub(bodies[0].pos, p5.Vector.mult(v1New, BASE_DT));
+      bodies[1].prevPos = p5.Vector.sub(bodies[1].pos, p5.Vector.mult(v2New, BASE_DT));
+    }
   }
 }
 
-function drawTrails(trail, col) {
-  noFill();
-  stroke(col);
-  beginShape();
-  for (let p of trail) {
-    vertex(p.x, p.y);
+function computeCOMandMomentum() {
+  let totalMass = 0, xSum = 0, ySum = 0;
+  let momentumX = 0, momentumY = 0;
+  for (let body of bodies) {
+    totalMass += body.mass;
+    xSum += body.pos.x * body.mass;
+    ySum += body.pos.y * body.mass;
+    let vel = p5.Vector.sub(body.pos, body.prevPos).div(BASE_DT);
+    momentumX += body.mass * vel.x;
+    momentumY += body.mass * vel.y;
   }
-  endShape();
+  comX = totalMass > 0 ? xSum / totalMass : 0;
+  comY = totalMass > 0 ? ySum / totalMass : 0;
+  totalMomentum = createVector(momentumX, momentumY).mag();
+
+  if (prevComX !== null) {
+    comDrift = createVector(comX - prevComX, comY - prevComY).mag();
+  } else {
+    comDrift = 0;
+  }
+  prevComX = comX;
+  prevComY = comY;
 }
 
-function computeCenterOfMass(b1, b2) {
-  let totalMass = b1.mass + b2.mass;
-  let comX = (b1.pos.x * b1.mass + b2.pos.x * b2.mass) / totalMass;
-  let comY = (b1.pos.y * b1.mass + b2.pos.y * b2.mass) / totalMass;
-  return createVector(comX, comY);
+function handleCollisions(dt) {
+  let b1 = bodies[0];
+  let b2 = bodies[1];
+  
+  // Simple discrete collision check with interpolation
+  let distVec = p5.Vector.sub(b2.pos, b1.pos);
+  let distance = distVec.mag();
+  let minDist = (sqrt(b1.mass) + sqrt(b2.mass)) * 1.5; // Larger radius
+
+  if (distance < minDist) {
+    lastCollisionFrame = frameCount;
+    console.log("Collision detected: distance=", distance, "minDist=", minDist, "cor=", cor);
+    
+    distVec.normalize();
+    let v1 = p5.Vector.sub(b1.pos, b1.prevPos).div(dt);
+    let v2 = p5.Vector.sub(b2.pos, b2.prevPos).div(dt);
+    let relVel = p5.Vector.sub(v1, v2).dot(distVec);
+    
+    // Apply collision impulse (no relVel < 0 check)
+    let impulse = (1 + cor) * relVel / (b1.mass + b2.mass);
+    let impulseVec = distVec.mult(impulse);
+    
+    // Update velocities
+    b1.prevPos = p5.Vector.sub(b1.pos, p5.Vector.sub(v1, p5.Vector.mult(impulseVec, b1.mass)).mult(dt));
+    b2.prevPos = p5.Vector.sub(b2.pos, p5.Vector.add(v2, p5.Vector.mult(impulseVec, b2.mass)).mult(dt));
+    
+    // Separate bodies
+    let correction = distVec.copy().mult((minDist - distance) * 0.5);
+    b1.pos.sub(correction);
+    b2.pos.add(correction);
+    
+    // For cor = 0, ensure bodies stick by setting equal velocities
+    if (cor === 0) {
+      let totalMass = b1.mass + b2.mass;
+      let vAvg = p5.Vector.add(p5.Vector.mult(v1, b1.mass), p5.Vector.mult(v2, b2.mass)).div(totalMass);
+      b1.prevPos = p5.Vector.sub(b1.pos, p5.Vector.mult(vAvg, dt));
+      b2.prevPos = p5.Vector.sub(b2.pos, p5.Vector.mult(vAvg, dt));
+    }
+  }
+}
+
+function updateTrails() {
+  trailLayer.fill(0, 10);
+  trailLayer.noStroke();
+  trailLayer.rect(0, 0, width, height);
+  for (let body of bodies) {
+    body.drawTrail(trailLayer);
+  }
+}
+
+function drawCenterOfMass() {
+  let pulse = 50 + 20 * sin(frameCount * 0.1);
+  noStroke();
+  fill(0, 255, 0, 100);
+  let s = screenPos(comX, comY);
+  ellipse(s.x, s.y, pulse);
+  fill(0, 255, 0);
+  ellipse(s.x, s.y, 8);
+}
+
+function drawUI() {
+  fill(255);
+  textSize(14);
+  text('Mass 1: ' + m1Slider.value().toFixed(2), m1Slider.x * 2 + m1Slider.width, 35);
+  text('Mass 2: ' + m2Slider.value().toFixed(2), m2Slider.x * 2 + m2Slider.width, 65);
+  text('Distance: ' + distSlider.value(), distSlider.x * 2 + distSlider.width, 95);
+  text('G: ' + G.toFixed(2), gSlider.x * 2 + gSlider.width, 125);
+  text('Time Scale: ' + timeScale.toFixed(2), timeSlider.x * 2 + timeSlider.width, 155);
+  text('Restitution: ' + cor.toFixed(2), corSlider.x * 2 + corSlider.width, 185);
+  text('Total Momentum: ' + totalMomentum.toFixed(4), 20, 215);
+  text('COM Drift: ' + comDrift.toFixed(4), 20, 245);
+  if (frameCount - lastCollisionFrame < 10) {
+    fill(255, 0, 0);
+    text('COLLISION!', 20, 275);
+  }
+}
+
+function screenPos(x, y) {
+  return createVector(width / 2 + x, height / 2 + y);
 }
 
 class Body {
-  constructor(pos, vel, r, mass, col) {
-    this.pos = pos.copy();
-    this.r = r;
+  constructor(x, y, vx, vy, mass, color) {
+    this.pos = createVector(x, y);
+    this.prevPos = createVector(x - vx * BASE_DT, y - vy * BASE_DT);
     this.mass = mass;
-    this.col = col;
-    this.prevPos = p5.Vector.sub(this.pos, vel.copy());
-    this.acc = createVector(0, 0);
+    this.color = color;
+    this.force = createVector(0, 0);
+    this.radius = sqrt(mass) * 0.8;
   }
 
-  applyForce(f) {
-    let a = p5.Vector.div(f, this.mass);
-    this.acc.add(a);
+  computeForce(others) {
+    this.force.set(0, 0);
+    for (let other of others) {
+      if (other === this) continue;
+      
+      let r = p5.Vector.sub(other.pos, this.pos);
+      let distSq = r.magSq() + softening;
+      let f = (G * this.mass * other.mass) / (distSq * sqrt(distSq));
+      
+      this.force.add(p5.Vector.mult(r, f));
+    }
   }
 
-  update() {
-    let temp = this.pos.copy();
-    this.pos.add(p5.Vector.sub(this.pos, this.prevPos).add(this.acc));
-    this.prevPos = temp;
-    this.acc.mult(0);
+  verletStep(dt) {
+    let accel = p5.Vector.div(this.force, this.mass);
+    let newPos = p5.Vector.sub(
+      p5.Vector.mult(this.pos, 2),
+      this.prevPos
+    ).add(p5.Vector.mult(accel, dt * dt));
+    
+    this.prevPos = this.pos.copy();
+    this.pos = newPos;
   }
 
-  attract(other, G) {
-    let force = p5.Vector.sub(this.pos, other.pos);
-    let distance = constrain(force.mag(), 5, 500);
-    force.normalize();
-    let strength = (G * this.mass * other.mass) / (distance * distance);
-    force.mult(strength);
-    return force;
+  drawTrail(pg) {
+    pg.noStroke();
+    pg.fill(this.color[0], this.color[1], this.color[2], 150);
+    let s = screenPos(this.pos.x, this.pos.y);
+    pg.ellipse(s.x, s.y, 3);
   }
 
-  show() {
-    fill(this.col);
+  display() {
+    push();
+    let s = screenPos(this.pos.x, this.pos.y);
+    translate(s.x, s.y);
     noStroke();
-    ellipse(this.pos.x, this.pos.y, this.r * 2);
-  }
-
-  getVelocity() {
-    return p5.Vector.sub(this.pos, this.prevPos);
+    
+    fill(this.color[0], this.color[1], this.color[2], 50);
+    ellipse(0, 0, this.radius * 3);
+    fill(this.color[0], this.color[1], this.color[2], 100);
+    ellipse(0, 0, this.radius * 2);
+    
+    fill(this.color);
+    ellipse(0, 0, this.radius * 2);
+    
+    fill(255, 255, 255, 100);
+    ellipse(-this.radius/3, -this.radius/3, this.radius/2);
+    pop();
   }
 }
